@@ -69,7 +69,7 @@ type ClusterDeploymentSpec struct {
 	// ServiceSpec is spec related to deployment of services.
 	ServiceSpec ServiceSpec `json:"serviceSpec,omitempty"`
 	// DryRun specifies whether the template should be applied after validation or only validated.
-	DryRun bool `json:"dryRun,omitempty"`
+	DryRun bool `json:"dryRun"`
 }
 
 // ClusterDeploymentStatus defines the observed state of ClusterDeployment
