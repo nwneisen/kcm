@@ -146,7 +146,7 @@ jobs:
     name: Cleanup
     needs:
       - build
-      - provider-cloud-e2etest
+      - e2e-test
       - authorize
     runs-on: ubuntu-latest
     if: ${{ always() && !contains(needs.provider-cloud-e2etest.result, 'skipped') && contains(needs.build.result, 'success') }}
