@@ -17,6 +17,13 @@ on:
       - "*"
 
 jobs:
+  hello:
+    name: Hello
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hello
+        run: echo "Hello"
+
   authorize:
     if: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') }}
     environment: ${{ (github.event_name == 'pull_request_target' &&
