@@ -1,26 +1,16 @@
 name: CI
 on:
-  pull_request_target:
-    types:
-      - labeled
-      - opened
-      - synchronize
-      - reopened
-    branches:
-      - main
-      - '*-release'
+  pull_request:
+    types: ["opened", "reopened", "synchronize", "ready_for_review"]
+    branches: ["main"]
     paths-ignore:
-      - 'config/**'
-      - '**.md'
-  push:
-    tags:
-      - '*'
+      - "config/**"
+      - "**.md"
 
 jobs:
   authorize:
     if: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') }}
-    environment:
-      ${{ (github.event_name == 'pull_request_target' &&
+    environment: ${{ (github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name != github.repository) &&
       'external' || 'internal' }}
     runs-on: ubuntu-latest
@@ -86,7 +76,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
+          go-version-file: "go.mod"
           cache: true # default
       - name: Lint
         run: GOLANGCI_LINT_TIMEOUT=10m make lint
@@ -128,189 +118,89 @@ jobs:
           make kcm-chart-release
           make helm-push
 
-  controller-e2etest:
-    name: E2E Controller
+  generate-provider-list:
+    name: Generate Provider List from Config
     runs-on: ubuntu-latest
-    env:
-      PUBLIC_REPO: ${{ contains(needs.authorize.result, 'success') && needs.authorize.outputs.public_repo == 'true' }}
-    if: ${{ !contains( github.event.pull_request.labels.*.name, 'test e2e') }}
-    needs: build
-    concurrency:
-      group: controller-${{ github.head_ref || github.run_id }}
-      cancel-in-progress: true
+    needs: authorize
+    # Only run if authorize succeeded and provided a config
+    if: ${{ needs.authorize.result == 'success' && needs.authorize.outputs.config != '' }}
     outputs:
-      clusterprefix: ${{ needs.build.outputs.clusterprefix }}
-      version: ${{ needs.build.outputs.version }}
-      pr: ${{ needs.build.outputs.pr }}
+      providers: ${{ steps.get_providers.outputs.providers }}
     steps:
-      - name: Set public registry env variables
-        if: ${{ env.PUBLIC_REPO == 'true' }}
+      - name: Install yq
         run: |
-          echo "REGISTRY_REPO=oci://ghcr.io/k0rdent/kcm/charts-ci" >> $GITHUB_ENV
-          echo "IMG=ghcr.io/k0rdent/kcm/controller-ci:${{ needs.build.outputs.version }}" >> $GITHUB_ENV
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{fromJSON(needs.build.outputs.pr).merge_commit_sha}}
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-      - name: Run E2E tests
-        env:
-          GINKGO_LABEL_FILTER: 'controller'
-          CLUSTER_DEPLOYMENT_PREFIX: ${{ needs.build.outputs.clusterprefix }}
-          VERSION: ${{ needs.build.outputs.version }}
+          sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
+          sudo chmod +x /usr/bin/yq
+      - name: Extract providers from config
+        id: get_providers
         run: |
-          make test-e2e
-      - name: Archive test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: support-bundles
-          path: |
-            *.tar.gz
+          config_base64="${{ needs.authorize.outputs.config }}"
+          providers_json=$(echo "$config_base64" | base64 -d | yq e 'keys | .[]' -o=json | jq -c 'unique')
+          echo "Detected providers: $providers_json"
+          echo "providers=$providers_json" >> $GITHUB_OUTPUT
 
-  provider-cloud-e2etest:
-    name: E2E Cloud Providers
-    runs-on: ubuntu-latest
-    if: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') }}
-    needs:
-       - authorize
-       - build
-    concurrency:
-      group: cloud-${{ github.head_ref || github.run_id }}
-      cancel-in-progress: true
-    outputs:
-      clusterprefix: ${{ needs.build.outputs.clusterprefix }}
-      version: ${{ needs.build.outputs.version }}
-      pr: ${{ needs.build.outputs.pr }}
-    env:
-      AWS_REGION: us-west-2
-      AWS_ACCESS_KEY_ID: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
-      AZURE_REGION: westus2
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.CI_AZURE_SUBSCRIPTION_ID }}
-      AZURE_TENANT_ID: ${{ secrets.CI_AZURE_TENANT_ID }}
-      AZURE_CLIENT_ID: ${{ secrets.CI_AZURE_CLIENT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.CI_AZURE_CLIENT_SECRET }}
-      GCP_B64ENCODED_CREDENTIALS: ${{ secrets.CI_GCP_B64ENCODED_CREDENTIALS }}
-      GCP_PROJECT: k0rdent-ci
-      GCP_REGION: us-east4
-      PUBLIC_REPO: ${{ needs.authorize.outputs.public_repo == 'true' }}
-    steps:
-      - name: Set public registry env variables
-        if: ${{ env.PUBLIC_REPO == 'true' }}
-        run: |
-          echo "REGISTRY_REPO=oci://ghcr.io/k0rdent/kcm/charts-ci" >> $GITHUB_ENV
-          echo "IMG=ghcr.io/k0rdent/kcm/controller-ci:${{ needs.build.outputs.version }}" >> $GITHUB_ENV
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{fromJSON(needs.build.outputs.pr).merge_commit_sha}}
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: true # default
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-      - name: Load testing configuration
-        if: ${{ needs.authorize.outputs.config != '' }}
-        run: |
-          echo -n "${{ needs.authorize.outputs.config }}" | base64 -d > test/e2e/config/config.yaml
-          echo "Testing configuration was overwritten:"
-          cat test/e2e/config/config.yaml
-      - name: Run E2E tests
-        env:
-          GINKGO_LABEL_FILTER: 'provider:cloud'
-          CLUSTER_DEPLOYMENT_PREFIX: ${{ needs.build.outputs.clusterprefix }}
-          VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          make test-e2e
-      - name: Archive test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: support-bundles
-          path: |
-            *.tar.gz
-
-  provider-onprem-e2etest:
-    name: E2E On-Prem Providers
-    runs-on: self-hosted
-    if: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') }}
+  e2e-tests:
+    name: E2E Tests
+    uses: .github/workflows/e2e-test.yml
     needs:
       - authorize
       - build
-    concurrency:
-      group: onprem-${{ github.head_ref || github.run_id }}
-      cancel-in-progress: true
-    outputs:
+      - generate-provider-list
+    secrets: inherit
+    # Always run the job structure, but matrix entries control actual execution
+    if: ${{ always() }}
+    with:
+      provider: ${{ matrix.provider }}
+      runner: ${{ matrix.runner }}
+      condition: ${{ matrix.condition }}
+      ginkgo_filter: ${{ matrix.ginkgo_filter }}
       clusterprefix: ${{ needs.build.outputs.clusterprefix }}
       version: ${{ needs.build.outputs.version }}
       pr: ${{ needs.build.outputs.pr }}
-    env:
-      VSPHERE_USER: ${{ secrets.CI_VSPHERE_USER }}
-      VSPHERE_PASSWORD: ${{ secrets.CI_VSPHERE_PASSWORD }}
-      VSPHERE_SERVER: ${{ secrets.CI_VSPHERE_SERVER }}
-      VSPHERE_THUMBPRINT: ${{ secrets.CI_VSPHERE_THUMBPRINT }}
-      VSPHERE_DATACENTER: ${{ secrets.CI_VSPHERE_DATACENTER }}
-      VSPHERE_DATASTORE: ${{ secrets.CI_VSPHERE_DATASTORE }}
-      VSPHERE_RESOURCEPOOL: ${{ secrets.CI_VSPHERE_RESOURCEPOOL }}
-      VSPHERE_FOLDER: ${{ secrets.CI_VSPHERE_FOLDER }}
-      VSPHERE_CONTROL_PLANE_ENDPOINT: ${{ secrets.CI_VSPHERE_CONTROL_PLANE_ENDPOINT }}
-      VSPHERE_VM_TEMPLATE: ${{ secrets.CI_VSPHERE_VM_TEMPLATE }}
-      VSPHERE_NETWORK: ${{ secrets.CI_VSPHERE_NETWORK }}
-      VSPHERE_SSH_KEY: ${{ secrets.CI_VSPHERE_SSH_KEY }}
-      PUBLIC_REPO: ${{ needs.authorize.outputs.public_repo == 'true' }}
-    steps:
-      - name: Set public registry env variables
-        if: ${{ env.PUBLIC_REPO == 'true' }}
-        run: |
-          echo "REGISTRY_REPO=oci://ghcr.io/k0rdent/kcm/charts-ci" >> $GITHUB_ENV
-          echo "IMG=ghcr.io/k0rdent/kcm/controller-ci:${{ needs.build.outputs.version }}" >> $GITHUB_ENV
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{fromJSON(needs.build.outputs.pr).merge_commit_sha}}
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: true # default
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-      - name: Load testing configuration
-        if: ${{ needs.authorize.outputs.config != '' }}
-        run: |
-          echo -n "${{ needs.authorize.outputs.config }}" | base64 -d > test/e2e/config/config.yaml
-          echo "Testing configuration was overwritten:"
-          cat test/e2e/config/config.yaml
-      - name: Run E2E tests
-        env:
-          GINKGO_LABEL_FILTER: 'provider:onprem'
-          CLUSTER_DEPLOYMENT_PREFIX: ${{ needs.build.outputs.clusterprefix }}
-          VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          make test-e2e
-      - name: Archive test results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: support-bundles
-          path: |
-            *.tar.gz
+    strategy:
+      fail-fast: false # Allow other matrix jobs to continue if one fails
+      matrix:
+        include:
+          # Controller tests run only when 'test e2e' label is NOT present
+          - provider: controller
+            runner: ubuntu-latest
+            # Condition: No 'test e2e' label
+            condition: ${{ !contains( github.event.pull_request.labels.*.name, 'test e2e') }}
+            ginkgo_filter: "controller"
+
+          # Provider tests run only when 'test e2e' label IS present AND the provider is in the generated list
+          - provider: aws
+            runner: ubuntu-latest
+            # Condition: 'test e2e' label IS present AND generate-provider-list succeeded AND 'aws' is in its output
+            condition: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-provider-list.result == 'success' && contains(fromJson(needs.generate-provider-list.outputs.providers), 'aws') }}
+            ginkgo_filter: "provider:cloud"
+          - provider: azure
+            runner: ubuntu-latest
+            # Condition: 'test e2e' label IS present AND generate-provider-list succeeded AND 'azure' is in its output
+            condition: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-provider-list.result == 'success' && contains(fromJson(needs.generate-provider-list.outputs.providers), 'azure') }}
+            ginkgo_filter: "provider:cloud"
+          - provider: gcp
+            runner: ubuntu-latest
+            # Condition: 'test e2e' label IS present AND generate-provider-list succeeded AND 'gcp' is in its output
+            condition: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-provider-list.result == 'success' && contains(fromJson(needs.generate-provider-list.outputs.providers), 'gcp') }}
+            ginkgo_filter: "provider:cloud"
+          - provider: onprem
+            runner: self-hosted
+            # Condition: 'test e2e' label IS present AND generate-provider-list succeeded AND any onprem provider (vsphere, docker, openstack, adopted) is in its output
+            condition: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-provider-list.result == 'success' && (contains(fromJson(needs.generate-provider-list.outputs.providers), 'vsphere') || contains(fromJson(needs.generate-provider-list.outputs.providers), 'docker') || contains(fromJson(needs.generate-provider-list.outputs.providers), 'openstack') || contains(fromJson(needs.generate-provider-list.outputs.providers), 'adopted')) }}
+            ginkgo_filter: "provider:onprem"
+
 
   cleanup:
     name: Cleanup
     needs:
       - build
-      - provider-cloud-e2etest
+      - e2e-tests
       - authorize
     runs-on: ubuntu-latest
-    if: ${{ always() && !contains(needs.provider-cloud-e2etest.result, 'skipped') && contains(needs.build.result, 'success') }}
+    # Run cleanup if build succeeded, authorize succeeded (meaning e2e was requested),
+    # and the e2e-tests job didn't fail or get cancelled.
+    if: ${{ always() && needs.build.result == 'success' && needs.authorize.result == 'success' && needs.e2e-tests.result != 'failure' && needs.e2e-tests.result != 'cancelled' }}
     timeout-minutes: 15
     outputs:
       clusterprefix: ${{ needs.build.outputs.clusterprefix }}
@@ -325,7 +215,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
+          go-version-file: "go.mod"
           cache: true # default
       - name: AWS Test Resources
         env:
@@ -337,7 +227,7 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.CI_AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.CI_AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.CI_AZURE_CLIENT_SECRET }}
-          CLUSTER_NAME: '${{ needs.build.outputs.clusterprefix }}'
+          CLUSTER_NAME: "${{ needs.build.outputs.clusterprefix }}"
         run: |
           make dev-aws-nuke
           make dev-azure-nuke

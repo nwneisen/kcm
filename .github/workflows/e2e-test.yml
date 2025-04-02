@@ -1,0 +1,139 @@
+name: E2E Tests
+on:
+  workflow_call:
+    inputs:
+      provider:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      condition:
+        required: false
+        type: string
+        default: "true" # Default to true if not provided
+      ginkgo_filter:
+        required: false
+        type: string
+        default: "" # Default to empty if not provided
+      clusterprefix:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      pr:
+        required: true
+        type: string
+
+jobs:
+    e2e-test:
+        name: E2E Tests - ${{ inputs.provider }}
+        runs-on: ${{ inputs.runner }}
+        if: ${{ inputs.condition }}
+        concurrency:
+            group: ${{ inputs.provider }}-${{ github.head_ref || github.run_id }}
+            cancel-in-progress: true
+        outputs:
+            clusterprefix: ${{ needs.build.inputs.clusterprefix }}
+            version: ${{ needs.build.inputs.version }}
+            pr: ${{ needs.build.inputs.pr }}
+        env:
+            PUBLIC_REPO: ${{ needs.authorize.outputs.public_repo == 'true' }}
+        steps:
+            - name: Set public registry env variables
+              if: ${{ env.PUBLIC_REPO == 'true' }}
+              run: |
+                  echo "REGISTRY_REPO=oci://ghcr.io/k0rdent/kcm/charts-ci" >> $GITHUB_ENV
+                  echo "IMG=ghcr.io/k0rdent/kcm/controller-ci:${{ needs.build.inputs.version }}" >> $GITHUB_ENV
+            - name: Checkout repository
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+                  ref: ${{fromJSON(needs.build.inputs.pr).]
+[]}}
+            - name: Setup Go
+              uses: actions/setup-go@v5
+              with:
+                  go-version-file: "go.mod"
+                  cache: true # default
+            - name: Setup kubectl
+              uses: azure/setup-kubectl@v4
+            - name: Load testing configuration
+              if: ${{ needs.authorize.outputs.config != '' }}
+              run: |
+                  echo -n "${{ needs.authorize.outputs.config }}" | base64 -d > test/e2e/config/config.yaml
+                  echo "Testing configuration was overwritten:"
+                  cat test/e2e/config/config.yaml
+
+            - name: Set aws cloud provider environment variables
+              if: inputs.provider == 'aws'
+              env:
+                AWS_REGION: us-west-2
+                AWS_ACCESS_KEY_ID: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
+                AWS_SECRET_ACCESS_KEY: ${{ secrets.CI_AWS_SECRET_ACCESS_KEY }}
+              run: |
+                for var in AWS_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+                  echo "${var}=${!var}" >> $GITHUB_ENV
+                done
+
+            - name: Set azure cloud provider environment variables
+              if: inputs.provider == 'azure'
+              env:
+                AZURE_REGION: westus2
+                AZURE_SUBSCRIPTION_ID: ${{ secrets.CI_AZURE_SUBSCRIPTION_ID }}
+                AZURE_TENANT_ID: ${{ secrets.CI_AZURE_TENANT_ID }}
+                AZURE_CLIENT_ID: ${{ secrets.CI_AZURE_CLIENT_ID }}
+                AZURE_CLIENT_SECRET: ${{ secrets.CI_AZURE_CLIENT_SECRET }}
+              run: |
+                for var in AZURE_REGION AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
+                  echo "${var}=${!var}" >> $GITHUB_ENV
+                done
+
+            - name: Set gcp cloud provider environment variables
+              if: inputs.provider == 'gcp'
+              env:
+                GCP_B64ENCODED_CREDENTIALS: ${{ secrets.CI_GCP_B64ENCODED_CREDENTIALS }}
+                GCP_PROJECT: k0rdent-ci
+                GCP_REGION: us-east4
+              run: |
+                for var in GCP_B64ENCODED_CREDENTIALS GCP_PROJECT GCP_REGION; do
+                  echo "${var}=${!var}" >> $GITHUB_ENV
+                done
+
+            - name: Set on-prem environment variables
+              if: inputs.provider == 'onprem'
+              env:
+                VSPHERE_USER: ${{ secrets.CI_VSPHERE_USER }}
+                VSPHERE_PASSWORD: ${{ secrets.CI_VSPHERE_PASSWORD }}
+                VSPHERE_SERVER: ${{ secrets.CI_VSPHERE_SERVER }}
+                VSPHERE_THUMBPRINT: ${{ secrets.CI_VSPHERE_THUMBPRINT }}
+                VSPHERE_DATACENTER: ${{ secrets.CI_VSPHERE_DATACENTER }}
+                VSPHERE_DATASTORE: ${{ secrets.CI_VSPHERE_DATASTORE }}
+                VSPHERE_RESOURCEPOOL: ${{ secrets.CI_VSPHERE_RESOURCEPOOL }}
+                VSPHERE_FOLDER: ${{ secrets.CI_VSPHERE_FOLDER }}
+                VSPHERE_CONTROL_PLANE_ENDPOINT: ${{ secrets.CI_VSPHERE_CONTROL_PLANE_ENDPOINT }}
+                VSPHERE_VM_TEMPLATE: ${{ secrets.CI_VSPHERE_VM_TEMPLATE }}
+                VSPHERE_NETWORK: ${{ secrets.CI_VSPHERE_NETWORK }}
+                VSPHERE_SSH_KEY: ${{ secrets.CI_VSPHERE_SSH_KEY }}
+              run: |
+                for var in VSPHERE_USER VSPHERE_PASSWORD VSPHERE_SERVER VSPHERE_THUMBPRINT \
+                          VSPHERE_DATACENTER VSPHERE_DATASTORE VSPHERE_RESOURCEPOOL VSPHERE_FOLDER \
+                          VSPHERE_CONTROL_PLANE_ENDPOINT VSPHERE_VM_TEMPLATE VSPHERE_NETWORK VSPHERE_SSH_KEY; do
+                  echo "${var}=${!var}" >> $GITHUB_ENV
+                done
+
+            - name: Run E2E tests
+              env:
+                  GINKGO_LABEL_FILTER: ${{ inputs.ginkgo_filter }}
+                  CLUSTER_DEPLOYMENT_PREFIX: ${{ needs.build.inputs.clusterprefix }}
+                  VERSION: ${{ needs.build.inputs.version }}
+              run: |
+                  make test-e2e
+            - name: Archive test results
+              uses: actions/upload-artifact@v4
+              if: always()
+              with:
+                  name: support-bundles-${{ inputs.provider }}
+                  path: |
+                      *.tar.gz
