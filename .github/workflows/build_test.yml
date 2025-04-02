@@ -136,6 +136,12 @@ jobs:
             - build
         secrets: inherit
 
+  hello:
+    name: hello
+    runs-on: ubuntu-latest
+    steps:
+      - name: hello
+        run: echo "hello"
   cleanup:
     name: Cleanup
     needs:
