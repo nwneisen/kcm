@@ -8,19 +8,18 @@ on:
       - reopened
     branches:
       - main
-      - '*-release'
+      - "*-release"
     paths-ignore:
-      - 'config/**'
-      - '**.md'
+      - "config/**"
+      - "**.md"
   push:
     tags:
-      - '*'
+      - "*"
 
 jobs:
   authorize:
     if: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') }}
-    environment:
-      ${{ (github.event_name == 'pull_request_target' &&
+    environment: ${{ (github.event_name == 'pull_request_target' &&
       github.event.pull_request.head.repo.full_name != github.repository) &&
       'external' || 'internal' }}
     runs-on: ubuntu-latest
@@ -86,7 +85,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
+          go-version-file: "go.mod"
           cache: true # default
       - name: Lint
         run: GOLANGCI_LINT_TIMEOUT=10m make lint
@@ -128,13 +127,13 @@ jobs:
           make kcm-chart-release
           make helm-push
 
-    e2e-tests:
-        name: E2E Tests
-        uses: ./.github/workflows/e2e-test.yml
-        needs:
-            - authorize
-            - build
-        secrets: inherit
+  e2e-tests:
+    name: E2E Tests
+    uses: ./.github/workflows/e2e-test.yml
+    needs:
+      - authorize
+      - build
+    secrets: inherit
 
   hello:
     name: hello
@@ -164,7 +163,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
+          go-version-file: "go.mod"
           cache: true # default
       - name: AWS Test Resources
         env:
@@ -176,7 +175,7 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.CI_AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.CI_AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.CI_AZURE_CLIENT_SECRET }}
-          CLUSTER_NAME: '${{ needs.build.outputs.clusterprefix }}'
+          CLUSTER_NAME: "${{ needs.build.outputs.clusterprefix }}"
         run: |
           make dev-aws-nuke
           make dev-azure-nuke
