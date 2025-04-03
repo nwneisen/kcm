@@ -8,7 +8,7 @@ on:
       - "**.md"
 
 jobs:
-  hello:
+  test3:
     runs-on: ubuntu-latest
     steps:
       - name: Hello world
