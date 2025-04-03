@@ -212,7 +212,7 @@ jobs:
 
   e2e-tests:
     name: E2E Tests
-    uses: .github/workflows/e2e-test.yml
+    uses: ./.github/workflows/e2e-test.yml
     needs:
       - authorize
       - build
