@@ -117,17 +117,19 @@ jobs:
           make kcm-chart-release
           make helm-push
 
-  generate-provider-list:
-    name: Generate Provider List from Config
+  generate-e2e-matrix:
+    name: Generate E2E Matrix
     runs-on: ubuntu-latest
     needs: authorize
     # Only run if authorize succeeded and provided a config
     if: ${{ needs.authorize.result == 'success' && needs.authorize.outputs.config != '' }}
     outputs:
       providers: ${{ steps.get_providers.outputs.providers }}
+      matrix: ${{ steps.generate_matrix.outputs.matrix }}
     steps:
-      - name: Install yq
+      - name: Install yq and jq
         run: |
+          sudo apt-get update && sudo apt-get install -y jq
           sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
           sudo chmod +x /usr/bin/yq
       - name: Extract providers from config
@@ -137,22 +139,13 @@ jobs:
           providers_json=$(echo "$config_base64" | base64 -d | yq e 'keys | .[]' -o=json | jq -c 'unique')
           echo "Detected providers: $providers_json"
           echo "providers=$providers_json" >> $GITHUB_OUTPUT
-
-  generate-e2e-matrix:
-    name: Generate E2E Test Matrix
-    runs-on: ubuntu-latest
-    needs: generate-provider-list
-    # Only run if generate-provider-list succeeded (which implies authorize succeeded and provided a config)
-    if: ${{ needs.generate-provider-list.result == 'success' }}
-    outputs:
-      matrix: ${{ steps.generate_matrix.outputs.matrix }}
-    steps:
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
       - name: Generate matrix
         id: generate_matrix
         env:
-          PROVIDERS_JSON: ${{ needs.generate-provider-list.outputs.providers }}
+          # Use output from the previous step in *this* job
+          PROVIDERS_JSON: ${{ steps.get_providers.outputs.providers }}
+          # Define the condition prefix referencing *this* job's needs and outputs
+          CONDITION_PREFIX: "${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-e2e-setup.result == 'success' && "
         run: |
           # Base matrix with controller test (runs when 'test e2e' label is NOT present)
           matrix='[
@@ -164,15 +157,12 @@ jobs:
             }
           ]'
 
-          # Condition prefix for provider tests (run when 'test e2e' label IS present AND generate-provider-list succeeded)
-          condition_prefix="${{ contains( github.event.pull_request.labels.*.name, ''test e2e'') && needs.generate-provider-list.result == ''success'' && "
-
           # Add cloud providers if present
           if echo "$PROVIDERS_JSON" | jq -e 'contains(["aws"])' > /dev/null; then
             matrix=$(echo "$matrix" | jq '. + [{
               "provider": "aws",
               "runner": "ubuntu-latest",
-              "condition": env.condition_prefix + "contains(fromJson(needs.generate-provider-list.outputs.providers), ''aws'') }}",
+              "condition": env.CONDITION_PREFIX + "contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''aws'') }}",
               "ginkgo_filter": "provider:cloud"
             }]')
           fi
@@ -180,7 +170,7 @@ jobs:
             matrix=$(echo "$matrix" | jq '. + [{
               "provider": "azure",
               "runner": "ubuntu-latest",
-              "condition": env.condition_prefix + "contains(fromJson(needs.generate-provider-list.outputs.providers), ''azure'') }}",
+              "condition": env.CONDITION_PREFIX + "contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''azure'') }}",
               "ginkgo_filter": "provider:cloud"
             }]')
           fi
@@ -188,20 +178,21 @@ jobs:
             matrix=$(echo "$matrix" | jq '. + [{
               "provider": "gcp",
               "runner": "ubuntu-latest",
-              "condition": env.condition_prefix + "contains(fromJson(needs.generate-provider-list.outputs.providers), ''gcp'') }}",
+              "condition": env.CONDITION_PREFIX + "contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''gcp'') }}",
               "ginkgo_filter": "provider:cloud"
             }]')
           fi
 
           # Add onprem provider if any onprem provider is present
           if echo "$PROVIDERS_JSON" | jq -e 'any(. == "vsphere" or . == "docker" or . == "openstack" or . == "adopted")' > /dev/null; then
-            onprem_condition="env.condition_prefix + \"(\" + \
-              \"contains(fromJson(needs.generate-provider-list.outputs.providers), ''vsphere'') || \" + \
-              \"contains(fromJson(needs.generate-provider-list.outputs.providers), ''docker'') || \" + \
-              \"contains(fromJson(needs.generate-provider-list.outputs.providers), ''openstack'') || \" + \
-              \"contains(fromJson(needs.generate-provider-list.outputs.providers), ''adopted'')\" + \
+            onprem_condition="env.CONDITION_PREFIX + \"(\" + \
+              \"contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''vsphere'') || \" + \
+              \"contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''docker'') || \" + \
+              \"contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''openstack'') || \" + \
+              \"contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''adopted'')\" + \
               \") }}\""
-            matrix=$(echo "$matrix" | jq --argjson cond "$onprem_condition" '. + [{
+            # Use --argjson to pass the constructed condition string correctly into jq
+            matrix=$(echo "$matrix" | jq --arg cond "$onprem_condition" '. + [{
               "provider": "onprem",
               "runner": "self-hosted",
               "condition": $cond,
@@ -220,8 +211,7 @@ jobs:
     needs:
       - authorize
       - build
-      - generate-provider-list
-      - generate-e2e-matrix # Added dependency
+      - generate-e2e-matrix
     secrets: inherit
     # Always run the job structure, but matrix entries control actual execution
     # The condition within each matrix entry determines if it *actually* runs
@@ -236,8 +226,8 @@ jobs:
       pr: ${{ needs.build.outputs.pr }}
     strategy:
       fail-fast: false # Allow other matrix jobs to continue if one fails
-      # Dynamically generate the matrix from the previous job's output
-      matrix: ${{ fromJson(needs.generate-e2e-matrix.outputs.matrix) }}
+      # Dynamically generate the matrix from the combined job's output
+      matrix: ${{ fromJson(needs.generate-e2e-setup.outputs.matrix) }}
 
   cleanup:
     name: Cleanup
