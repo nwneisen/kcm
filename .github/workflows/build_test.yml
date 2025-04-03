@@ -125,11 +125,9 @@ jobs:
   generate-e2e-matrix:
     name: Generate E2E Matrix
     runs-on: ubuntu-latest
-    needs: authorize
-    # Only run if authorize succeeded and provided a config
-    if: ${{ needs.authorize.result == 'success' && needs.authorize.outputs.config != '' }}
+    needs: authorize # Keep needs to access outputs/result if it ran
+    if: ${{ always() }} # Run always, logic inside handles authorize result
     outputs:
-      providers: ${{ steps.get_providers.outputs.providers }}
       matrix: ${{ steps.generate_matrix.outputs.matrix }}
     steps:
       - name: Install yq and jq
@@ -152,60 +150,63 @@ jobs:
           # Define the condition prefix referencing *this* job's needs and outputs
           CONDITION_PREFIX: "${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-e2e-setup.result == 'success' }}"
         run: |
-          # Base matrix with controller test (runs when 'test e2e' label is NOT present)
+          # Default matrix: only controller test, runs if authorize fails/skipped or no config
           matrix='[
             {
               "provider": "controller",
               "runner": "ubuntu-latest",
-              "condition": "${{ !contains( github.event.pull_request.labels.*.name, 'test e2e') }}",
+              "condition": "true",
               "ginkgo_filter": "controller"
             }
           ]'
 
-          # Add cloud providers if present
-          if echo "$PROVIDERS_JSON" | jq -e 'contains(["aws"])' > /dev/null; then
-            matrix=$(echo "$matrix" | jq '. + [{
-              "provider": "aws",
-              "runner": "ubuntu-latest",
-              "condition": env.CONDITION_PREFIX + "contains(fromJson(needs.generate-e2e-setup.outputs.providers), 'aws') }}",
-              "ginkgo_filter": "provider:cloud"
-            }]')
-          fi
-          if echo "$PROVIDERS_JSON" | jq -e 'contains(["azure"])' > /dev/null; then
-            matrix=$(echo "$matrix" | jq '. + [{
-              "provider": "azure",
-              "runner": "ubuntu-latest",
-              "condition": env.CONDITION_PREFIX + "contains(fromJson(needs.generate-e2e-setup.outputs.providers), 'azure') }}",
-              "ginkgo_filter": "provider:cloud"
-            }]')
-          fi
-          if echo "$PROVIDERS_JSON" | jq -e 'contains(["gcp"])' > /dev/null; then
-            matrix=$(echo "$matrix" | jq '. + [{
-              "provider": "gcp",
-              "runner": "ubuntu-latest",
-              "condition": env.CONDITION_PREFIX + "contains(fromJson(needs.generate-e2e-setup.outputs.providers), 'gcp') }}",
-              "ginkgo_filter": "provider:cloud"
-            }]')
+          # If authorize succeeded and provided a config, generate matrix based on config
+          if [[ "${{ needs.authorize.result }}" == "success" && -n "${{ needs.authorize.outputs.config }}" ]]; then
+            echo "Authorize succeeded with config. Generating matrix based on config."
+            # Overwrite default matrix - we only want tests from the config now
+            matrix='[]'
+            providers_json='${{ steps.get_providers.outputs.providers }}' # Use providers extracted earlier
+
+            # Add cloud providers if present in config
+            if echo "$providers_json" | jq -e 'contains(["aws"])' > /dev/null; then
+              matrix=$(echo "$matrix" | jq '. + [{
+                "provider": "aws",
+                "runner": "ubuntu-latest",
+                "condition": "true", # Runs because authorize succeeded
+                "ginkgo_filter": "provider:cloud"
+              }]')
+            fi
+            if echo "$providers_json" | jq -e 'contains(["azure"])' > /dev/null; then
+              matrix=$(echo "$matrix" | jq '. + [{
+                "provider": "azure",
+                "runner": "ubuntu-latest",
+                "condition": "true", # Runs because authorize succeeded
+                "ginkgo_filter": "provider:cloud"
+              }]')
+            fi
+            if echo "$providers_json" | jq -e 'contains(["gcp"])' > /dev/null; then
+              matrix=$(echo "$matrix" | jq '. + [{
+                "provider": "gcp",
+                "runner": "ubuntu-latest",
+                "condition": "true", # Runs because authorize succeeded
+                "ginkgo_filter": "provider:cloud"
+              }]')
+            fi
+
+            # Add onprem provider if any onprem provider is present in config
+            if echo "$providers_json" | jq -e 'any(. == "vsphere" or . == "docker" or . == "openstack" or . == "adopted")' > /dev/null; then
+              matrix=$(echo "$matrix" | jq '. + [{
+                "provider": "onprem",
+                "runner": "self-hosted",
+                "condition": "true", # Runs because authorize succeeded
+                "ginkgo_filter": "provider:onprem"
+              }]')
+            fi
+          else
+            echo "Authorize did not succeed or no config provided. Using default controller-only matrix."
           fi
 
-          # Add onprem provider if any onprem provider is present
-          if echo "$PROVIDERS_JSON" | jq -e 'any(. == "vsphere" or . == "docker" or . == "openstack" or . == "adopted")' > /dev/null; then
-            onprem_condition="env.CONDITION_PREFIX + \"(\" + \
-              \"contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''vsphere'') || \" + \
-              \"contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''docker'') || \" + \
-              \"contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''openstack'') || \" + \
-              \"contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''adopted'')\" + \
-              \") }}\""
-            # Use --argjson to pass the constructed condition string correctly into jq
-            matrix=$(echo "$matrix" | jq --arg cond "$onprem_condition" '. + [{
-              "provider": "onprem",
-              "runner": "self-hosted",
-              "condition": $cond,
-              "ginkgo_filter": "provider:onprem"
-            }]')
-          fi
-
-          # Output the final matrix as a compact JSON string
+          # Output the final matrix
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
           echo "Generated Matrix:"
           echo "$matrix" | jq .
@@ -229,12 +230,13 @@ jobs:
       clusterprefix: ${{ needs.build.outputs.clusterprefix }}
       version: ${{ needs.build.outputs.version }}
       pr: ${{ needs.build.outputs.pr }}
-      public_repo: ${{ needs.authorize.outputs.public_repo }}
-      config: ${{ needs.authorize.outputs.config }}
+      # Use default values if authorize didn't succeed or provide outputs
+      public_repo: ${{ needs.authorize.outputs.public_repo || 'false' }}
+      config: ${{ needs.authorize.outputs.config || '' }}
     strategy:
       fail-fast: false # Allow other matrix jobs to continue if one fails
-      # Dynamically generate the matrix from the combined job's output
-      matrix: ${{ fromJson(needs.generate-e2e-setup.outputs.matrix) }}
+      # Dynamically generate the matrix from the generate-e2e-matrix job's output (corrected typo)
+      matrix: ${{ fromJson(needs.generate-e2e-matrix.outputs.matrix) }}
 
   cleanup:
     name: Cleanup
