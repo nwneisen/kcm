@@ -20,7 +20,7 @@ jobs:
       'external' || 'internal' }}
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.TOKEN }}
     outputs:
       config: ${{ steps.get_config.outputs.config }}
       public_repo: ${{ steps.get_config.outputs.public_repo }}
