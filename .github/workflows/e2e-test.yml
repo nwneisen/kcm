@@ -34,10 +34,6 @@ jobs:
         concurrency:
             group: ${{ inputs.provider }}-${{ github.head_ref || github.run_id }}
             cancel-in-progress: true
-        outputs:
-            clusterprefix: ${{ needs.build.inputs.clusterprefix }}
-            version: ${{ needs.build.inputs.version }}
-            pr: ${{ needs.build.inputs.pr }}
         env:
             PUBLIC_REPO: ${{ needs.authorize.outputs.public_repo == 'true' }}
         steps:
