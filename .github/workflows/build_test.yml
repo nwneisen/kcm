@@ -150,7 +150,7 @@ jobs:
           # Use output from the previous step in *this* job
           PROVIDERS_JSON: ${{ steps.get_providers.outputs.providers }}
           # Define the condition prefix referencing *this* job's needs and outputs
-          CONDITION_PREFIX: "${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-e2e-setup.result == 'success' && "
+          CONDITION_PREFIX: "${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-e2e-setup.result == 'success' }}"
         run: |
           # Base matrix with controller test (runs when 'test e2e' label is NOT present)
           matrix='[
