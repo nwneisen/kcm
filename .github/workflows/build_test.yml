@@ -229,6 +229,8 @@ jobs:
       clusterprefix: ${{ needs.build.outputs.clusterprefix }}
       version: ${{ needs.build.outputs.version }}
       pr: ${{ needs.build.outputs.pr }}
+      public_repo: ${{ needs.authorize.outputs.public_repo }}
+      config: ${{ needs.authorize.outputs.config }}
     strategy:
       fail-fast: false # Allow other matrix jobs to continue if one fails
       # Dynamically generate the matrix from the combined job's output

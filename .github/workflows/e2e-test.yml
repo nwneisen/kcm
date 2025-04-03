@@ -25,6 +25,12 @@ on:
       pr:
         required: true
         type: string
+      public_repo:
+        required: true
+        type: string
+      config:
+        required: true
+        type: string
 
 jobs:
     e2e-test:
@@ -35,13 +41,13 @@ jobs:
             group: ${{ inputs.provider }}-${{ github.head_ref || github.run_id }}
             cancel-in-progress: true
         env:
-            PUBLIC_REPO: ${{ needs.authorize.outputs.public_repo == 'true' }}
+            PUBLIC_REPO: ${{ inputs.public_repo == 'true' }}
         steps:
             - name: Set public registry env variables
               if: ${{ env.PUBLIC_REPO == 'true' }}
               run: |
                   echo "REGISTRY_REPO=oci://ghcr.io/k0rdent/kcm/charts-ci" >> $GITHUB_ENV
-                  echo "IMG=ghcr.io/k0rdent/kcm/controller-ci:${{ needs.build.inputs.version }}" >> $GITHUB_ENV
+                  echo "IMG=ghcr.io/k0rdent/kcm/controller-ci:${{ inputs.version }}" >> $GITHUB_ENV
             - name: Checkout repository
               uses: actions/checkout@v4
               with:
@@ -54,9 +60,9 @@ jobs:
             - name: Setup kubectl
               uses: azure/setup-kubectl@v4
             - name: Load testing configuration
-              if: ${{ needs.authorize.outputs.config != '' }}
+              if: ${{ inputs.config != '' }}
               run: |
-                  echo -n "${{ needs.authorize.outputs.config }}" | base64 -d > test/e2e/config/config.yaml
+                  echo -n "${{ inputs.config }}" | base64 -d > test/e2e/config/config.yaml
                   echo "Testing configuration was overwritten:"
                   cat test/e2e/config/config.yaml
 
@@ -120,8 +126,8 @@ jobs:
             - name: Run E2E tests
               env:
                   GINKGO_LABEL_FILTER: ${{ inputs.ginkgo_filter }}
-                  CLUSTER_DEPLOYMENT_PREFIX: ${{ needs.build.inputs.clusterprefix }}
-                  VERSION: ${{ needs.build.inputs.version }}
+                  CLUSTER_DEPLOYMENT_PREFIX: ${{ inputs.clusterprefix }}
+                  VERSION: ${{ inputs.version }}
               run: |
                   make test-e2e
             - name: Archive test results
