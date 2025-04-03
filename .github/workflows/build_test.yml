@@ -157,7 +157,7 @@ jobs:
             {
               "provider": "controller",
               "runner": "ubuntu-latest",
-              "condition": "${{ !contains( github.event.pull_request.labels.*.name, ''test e2e'') }}",
+              "condition": "${{ !contains( github.event.pull_request.labels.*.name, 'test e2e') }}",
               "ginkgo_filter": "controller"
             }
           ]'
@@ -167,7 +167,7 @@ jobs:
             matrix=$(echo "$matrix" | jq '. + [{
               "provider": "aws",
               "runner": "ubuntu-latest",
-              "condition": env.CONDITION_PREFIX + "contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''aws'') }}",
+              "condition": env.CONDITION_PREFIX + "contains(fromJson(needs.generate-e2e-setup.outputs.providers), 'aws') }}",
               "ginkgo_filter": "provider:cloud"
             }]')
           fi
@@ -175,7 +175,7 @@ jobs:
             matrix=$(echo "$matrix" | jq '. + [{
               "provider": "azure",
               "runner": "ubuntu-latest",
-              "condition": env.CONDITION_PREFIX + "contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''azure'') }}",
+              "condition": env.CONDITION_PREFIX + "contains(fromJson(needs.generate-e2e-setup.outputs.providers), 'azure') }}",
               "ginkgo_filter": "provider:cloud"
             }]')
           fi
@@ -183,7 +183,7 @@ jobs:
             matrix=$(echo "$matrix" | jq '. + [{
               "provider": "gcp",
               "runner": "ubuntu-latest",
-              "condition": env.CONDITION_PREFIX + "contains(fromJson(needs.generate-e2e-setup.outputs.providers), ''gcp'') }}",
+              "condition": env.CONDITION_PREFIX + "contains(fromJson(needs.generate-e2e-setup.outputs.providers), 'gcp') }}",
               "ginkgo_filter": "provider:cloud"
             }]')
           fi
