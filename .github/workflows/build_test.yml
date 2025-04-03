@@ -235,8 +235,9 @@ jobs:
       config: ${{ needs.authorize.outputs.config || '' }}
     strategy:
       fail-fast: false # Allow other matrix jobs to continue if one fails
-      # Dynamically generate the matrix from the generate-e2e-matrix job's output (corrected typo)
-      matrix: ${{ fromJson(needs.generate-e2e-matrix.outputs.matrix) }}
+      matrix:
+        # Use 'include' to add the dynamically generated configurations
+        include: ${{ fromJson(needs.generate-e2e-matrix.outputs.matrix) }}
 
   cleanup:
     name: Cleanup
