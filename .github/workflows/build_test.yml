@@ -138,6 +138,82 @@ jobs:
           echo "Detected providers: $providers_json"
           echo "providers=$providers_json" >> $GITHUB_OUTPUT
 
+  generate-e2e-matrix:
+    name: Generate E2E Test Matrix
+    runs-on: ubuntu-latest
+    needs: generate-provider-list
+    # Only run if generate-provider-list succeeded (which implies authorize succeeded and provided a config)
+    if: ${{ needs.generate-provider-list.result == 'success' }}
+    outputs:
+      matrix: ${{ steps.generate_matrix.outputs.matrix }}
+    steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Generate matrix
+        id: generate_matrix
+        env:
+          PROVIDERS_JSON: ${{ needs.generate-provider-list.outputs.providers }}
+        run: |
+          # Base matrix with controller test (runs when 'test e2e' label is NOT present)
+          matrix='[
+            {
+              "provider": "controller",
+              "runner": "ubuntu-latest",
+              "condition": "${{ !contains( github.event.pull_request.labels.*.name, ''test e2e'') }}",
+              "ginkgo_filter": "controller"
+            }
+          ]'
+
+          # Condition prefix for provider tests (run when 'test e2e' label IS present AND generate-provider-list succeeded)
+          condition_prefix="${{ contains( github.event.pull_request.labels.*.name, ''test e2e'') && needs.generate-provider-list.result == ''success'' && "
+
+          # Add cloud providers if present
+          if echo "$PROVIDERS_JSON" | jq -e 'contains(["aws"])' > /dev/null; then
+            matrix=$(echo "$matrix" | jq '. + [{
+              "provider": "aws",
+              "runner": "ubuntu-latest",
+              "condition": env.condition_prefix + "contains(fromJson(needs.generate-provider-list.outputs.providers), ''aws'') }}",
+              "ginkgo_filter": "provider:cloud"
+            }]')
+          fi
+          if echo "$PROVIDERS_JSON" | jq -e 'contains(["azure"])' > /dev/null; then
+            matrix=$(echo "$matrix" | jq '. + [{
+              "provider": "azure",
+              "runner": "ubuntu-latest",
+              "condition": env.condition_prefix + "contains(fromJson(needs.generate-provider-list.outputs.providers), ''azure'') }}",
+              "ginkgo_filter": "provider:cloud"
+            }]')
+          fi
+          if echo "$PROVIDERS_JSON" | jq -e 'contains(["gcp"])' > /dev/null; then
+            matrix=$(echo "$matrix" | jq '. + [{
+              "provider": "gcp",
+              "runner": "ubuntu-latest",
+              "condition": env.condition_prefix + "contains(fromJson(needs.generate-provider-list.outputs.providers), ''gcp'') }}",
+              "ginkgo_filter": "provider:cloud"
+            }]')
+          fi
+
+          # Add onprem provider if any onprem provider is present
+          if echo "$PROVIDERS_JSON" | jq -e 'any(. == "vsphere" or . == "docker" or . == "openstack" or . == "adopted")' > /dev/null; then
+            onprem_condition="env.condition_prefix + \"(\" + \
+              \"contains(fromJson(needs.generate-provider-list.outputs.providers), ''vsphere'') || \" + \
+              \"contains(fromJson(needs.generate-provider-list.outputs.providers), ''docker'') || \" + \
+              \"contains(fromJson(needs.generate-provider-list.outputs.providers), ''openstack'') || \" + \
+              \"contains(fromJson(needs.generate-provider-list.outputs.providers), ''adopted'')\" + \
+              \") }}\""
+            matrix=$(echo "$matrix" | jq --argjson cond "$onprem_condition" '. + [{
+              "provider": "onprem",
+              "runner": "self-hosted",
+              "condition": $cond,
+              "ginkgo_filter": "provider:onprem"
+            }]')
+          fi
+
+          # Output the final matrix as a compact JSON string
+          echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
+          echo "Generated Matrix:"
+          echo "$matrix" | jq .
+
   e2e-tests:
     name: E2E Tests
     uses: .github/workflows/e2e-test.yml
@@ -145,8 +221,10 @@ jobs:
       - authorize
       - build
       - generate-provider-list
+      - generate-e2e-matrix # Added dependency
     secrets: inherit
     # Always run the job structure, but matrix entries control actual execution
+    # The condition within each matrix entry determines if it *actually* runs
     if: ${{ always() }}
     with:
       provider: ${{ matrix.provider }}
@@ -158,37 +236,8 @@ jobs:
       pr: ${{ needs.build.outputs.pr }}
     strategy:
       fail-fast: false # Allow other matrix jobs to continue if one fails
-      matrix:
-        include:
-          # Controller tests run only when 'test e2e' label is NOT present
-          - provider: controller
-            runner: ubuntu-latest
-            # Condition: No 'test e2e' label
-            condition: ${{ !contains( github.event.pull_request.labels.*.name, 'test e2e') }}
-            ginkgo_filter: "controller"
-
-          # Provider tests run only when 'test e2e' label IS present AND the provider is in the generated list
-          - provider: aws
-            runner: ubuntu-latest
-            # Condition: 'test e2e' label IS present AND generate-provider-list succeeded AND 'aws' is in its output
-            condition: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-provider-list.result == 'success' && contains(fromJson(needs.generate-provider-list.outputs.providers), 'aws') }}
-            ginkgo_filter: "provider:cloud"
-          - provider: azure
-            runner: ubuntu-latest
-            # Condition: 'test e2e' label IS present AND generate-provider-list succeeded AND 'azure' is in its output
-            condition: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-provider-list.result == 'success' && contains(fromJson(needs.generate-provider-list.outputs.providers), 'azure') }}
-            ginkgo_filter: "provider:cloud"
-          - provider: gcp
-            runner: ubuntu-latest
-            # Condition: 'test e2e' label IS present AND generate-provider-list succeeded AND 'gcp' is in its output
-            condition: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-provider-list.result == 'success' && contains(fromJson(needs.generate-provider-list.outputs.providers), 'gcp') }}
-            ginkgo_filter: "provider:cloud"
-          - provider: onprem
-            runner: self-hosted
-            # Condition: 'test e2e' label IS present AND generate-provider-list succeeded AND any onprem provider (vsphere, docker, openstack, adopted) is in its output
-            condition: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-provider-list.result == 'success' && (contains(fromJson(needs.generate-provider-list.outputs.providers), 'vsphere') || contains(fromJson(needs.generate-provider-list.outputs.providers), 'docker') || contains(fromJson(needs.generate-provider-list.outputs.providers), 'openstack') || contains(fromJson(needs.generate-provider-list.outputs.providers), 'adopted')) }}
-            ginkgo_filter: "provider:onprem"
-
+      # Dynamically generate the matrix from the previous job's output
+      matrix: ${{ fromJson(needs.generate-e2e-matrix.outputs.matrix) }}
 
   cleanup:
     name: Cleanup
