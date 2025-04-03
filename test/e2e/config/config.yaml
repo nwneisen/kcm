@@ -22,12 +22,12 @@ adopted:
 - template: adopted-cluster-0-2-0
 aws:
 - template: aws-standalone-cp-0-2-0
- hosted:
+  hosted:
    template: aws-hosted-cp-0-2-0
 - template: aws-eks-0-2-0
 azure:
 - template: azure-standalone-cp-0-2-0
- hosted:
+  hosted:
    template: azure-hosted-cp-0-2-0
 vsphere:
 - template: vsphere-standalone-cp-0-2-0
