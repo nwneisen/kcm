@@ -122,122 +122,27 @@ jobs:
           make kcm-chart-release
           make helm-push
 
-  generate-e2e-matrix:
-    name: Generate E2E Matrix
-    runs-on: ubuntu-latest
-    needs: authorize # Keep needs to access outputs/result if it ran
-    if: ${{ always() }} # Run always, logic inside handles authorize result
-    outputs:
-      matrix: ${{ steps.generate_matrix.outputs.matrix }}
-    steps:
-      - name: Install yq and jq
-        run: |
-          sudo apt-get update && sudo apt-get install -y jq
-          sudo wget https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -O /usr/bin/yq
-          sudo chmod +x /usr/bin/yq
-      - name: Extract providers from config
-        id: get_providers
-        run: |
-          config_base64="${{ needs.authorize.outputs.config }}"
-          providers_json=$(echo "$config_base64" | base64 -d | yq e 'keys | .[]' -o=json | jq -c 'unique')
-          echo "Detected providers: $providers_json"
-          echo "providers=$providers_json" >> $GITHUB_OUTPUT
-      - name: Generate matrix
-        id: generate_matrix
-        env:
-          # Use output from the previous step in *this* job
-          PROVIDERS_JSON: ${{ steps.get_providers.outputs.providers }}
-          # Define the condition prefix referencing *this* job's needs and outputs
-          CONDITION_PREFIX: "${{ contains( github.event.pull_request.labels.*.name, 'test e2e') && needs.generate-e2e-setup.result == 'success' }}"
-        run: |
-          # Default matrix: only controller test, runs if authorize fails/skipped or no config
-          matrix='[
-            {
-              "provider": "controller",
-              "runner": "ubuntu-latest",
-              "condition": "true",
-              "ginkgo_filter": "controller"
-            }
-          ]'
-
-          # If authorize succeeded and provided a config, generate matrix based on config
-          if [[ "${{ needs.authorize.result }}" == "success" && -n "${{ needs.authorize.outputs.config }}" ]]; then
-            echo "Authorize succeeded with config. Generating matrix based on config."
-            # Overwrite default matrix - we only want tests from the config now
-            matrix='[]'
-            providers_json='${{ steps.get_providers.outputs.providers }}' # Use providers extracted earlier
-
-            # Add cloud providers if present in config
-            if echo "$providers_json" | jq -e 'contains(["aws"])' > /dev/null; then
-              matrix=$(echo "$matrix" | jq '. + [{
-                "provider": "aws",
-                "runner": "ubuntu-latest",
-                "condition": "true", # Runs because authorize succeeded
-                "ginkgo_filter": "provider:cloud"
-              }]')
-            fi
-            if echo "$providers_json" | jq -e 'contains(["azure"])' > /dev/null; then
-              matrix=$(echo "$matrix" | jq '. + [{
-                "provider": "azure",
-                "runner": "ubuntu-latest",
-                "condition": "true", # Runs because authorize succeeded
-                "ginkgo_filter": "provider:cloud"
-              }]')
-            fi
-            if echo "$providers_json" | jq -e 'contains(["gcp"])' > /dev/null; then
-              matrix=$(echo "$matrix" | jq '. + [{
-                "provider": "gcp",
-                "runner": "ubuntu-latest",
-                "condition": "true", # Runs because authorize succeeded
-                "ginkgo_filter": "provider:cloud"
-              }]')
-            fi
-
-            # Add onprem provider if any onprem provider is present in config
-            if echo "$providers_json" | jq -e 'any(. == "vsphere" or . == "docker" or . == "openstack" or . == "adopted")' > /dev/null; then
-              matrix=$(echo "$matrix" | jq '. + [{
-                "provider": "onprem",
-                "runner": "self-hosted",
-                "condition": "true", # Runs because authorize succeeded
-                "ginkgo_filter": "provider:onprem"
-              }]')
-            fi
-          else
-            echo "Authorize did not succeed or no config provided. Using default controller-only matrix."
-          fi
-
-          # Output the final matrix
-          echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
-          echo "Generated Matrix:"
-          echo "$matrix" | jq .
-
   e2e-tests:
     name: E2E Tests
     uses: ./.github/workflows/e2e-test.yml
     needs:
-      - authorize
-      - build
-      - generate-e2e-matrix
+      - authorize # Still need authorize result and config
+      - build # Still need build outputs
     secrets: inherit
-    # Always run the job structure, but matrix entries control actual execution
-    # The condition within each matrix entry determines if it *actually* runs
-    if: ${{ always() }}
+    # Only run if the 'test e2e' label is present
+    if: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') }}
     with:
-      provider: ${{ matrix.provider }}
-      runner: ${{ matrix.runner }}
-      condition: ${{ matrix.condition }}
-      ginkgo_filter: ${{ matrix.ginkgo_filter }}
+      # Pass build outputs
       clusterprefix: ${{ needs.build.outputs.clusterprefix }}
       version: ${{ needs.build.outputs.version }}
       pr: ${{ needs.build.outputs.pr }}
-      # Use default values if authorize didn't succeed or provide outputs
+      # Pass authorize outputs (or defaults)
       public_repo: ${{ needs.authorize.outputs.public_repo || 'false' }}
       config: ${{ needs.authorize.outputs.config || '' }}
-    strategy:
-      fail-fast: false # Allow other matrix jobs to continue if one fails
-      matrix:
-        # Use 'include' to add the dynamically generated configurations
-        include: ${{ fromJson(needs.generate-e2e-matrix.outputs.matrix) }}
+      # Pass authorize result and labels for matrix generation inside the reusable workflow
+      authorize_result: ${{ needs.authorize.result }}
+      pull_request_labels: ${{ toJson(github.event.pull_request.labels.*.name) }}
+    # Strategy is now handled within the reusable workflow
 
   cleanup:
     name: Cleanup
