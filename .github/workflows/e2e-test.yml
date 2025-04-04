@@ -123,7 +123,8 @@ jobs:
             echo "IMG=ghcr.io/k0rdent/kcm/controller-ci:${{ inputs.version }}" >> $GITHUB_ENV
       - name: Checkout repository
         uses: actions/checkout@v4
-        fetch-depth: 0
+        with:
+          fetch-depth: 0
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
