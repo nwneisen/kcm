@@ -109,7 +109,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.generate-e2e-matrix.outputs.matrix) }}
+      matrix:
+        include: ${{ fromJson(needs.generate-e2e-matrix.outputs.matrix) }}
     concurrency:
       group: ${{ matrix.provider }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
