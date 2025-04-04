@@ -2,7 +2,6 @@ name: E2E Tests
 on:
   workflow_call:
     inputs:
-      # Inputs from the caller workflow
       clusterprefix:
         required: true
         type: string
@@ -18,20 +17,11 @@ on:
       config:
         required: true
         type: string
-      # Inputs needed for matrix generation logic
-      authorize_result:
-        required: true
-        type: string
-      pull_request_labels: # JSON string array of label names
-        required: true
-        type: string
 
 jobs:
   generate-e2e-matrix:
     name: Generate E2E Matrix
     runs-on: ubuntu-latest
-    # No 'needs' here, relies on inputs from workflow_call
-    # Always run the generation logic; the matrix content depends on inputs
     if: ${{ always() }}
     outputs:
       matrix: ${{ steps.generate_matrix.outputs.matrix }}
@@ -54,14 +44,10 @@ jobs:
       - name: Generate matrix
         id: generate_matrix
         env:
-          # Use output from the previous step in *this* job
           PROVIDERS_JSON: ${{ steps.get_providers.outputs.providers }}
-          # Use inputs passed to the workflow
-          AUTHORIZE_RESULT: ${{ inputs.authorize_result }}
           CONFIG_BASE64: ${{ inputs.config }}
-          PR_LABELS_JSON: ${{ inputs.pull_request_labels }}
         run: |
-          # Default matrix: only controller test, runs if authorize fails/skipped or no config
+          # Default matrix: only controller test, runs if no config provided
           matrix='[
             {
               "provider": "controller",
@@ -71,12 +57,10 @@ jobs:
             }
           ]'
 
-          # Check if 'test e2e' label exists
-          has_e2e_label=$(echo "$PR_LABELS_JSON" | jq 'contains(["test e2e"])')
-
-          # If authorize succeeded, config provided, and 'test e2e' label exists, generate matrix based on config
-          if [[ "$AUTHORIZE_RESULT" == "success" && -n "$CONFIG_BASE64" && "$has_e2e_label" == "true" ]]; then
-            echo "Authorize succeeded with config and 'test e2e' label. Generating matrix based on config."
+          # If config provided, generate matrix based on config
+          # (Presence of config implies authorize succeeded and label was present)
+          if [[ -n "$CONFIG_BASE64" ]]; then
+            echo "Config provided. Generating matrix based on config."
             # Overwrite default matrix - we only want tests from the config now
             matrix='[]'
             providers_json='$PROVIDERS_JSON' # Use providers extracted earlier
@@ -117,7 +101,7 @@ jobs:
               }]')
             fi
           else
-            echo "Authorize did not succeed, no config provided, or 'test e2e' label missing. Using default controller-only matrix."
+            echo "No config provided. Using default controller-only matrix."
           fi
 
           # Output the final matrix
@@ -126,18 +110,18 @@ jobs:
           echo "$matrix" | jq .
 
   e2e-test:
-    name: E2E Tests - ${{ matrix.provider }} # Use matrix provider
-    needs: generate-e2e-matrix # Depend on the matrix generation
-    runs-on: ${{ matrix.runner }} # Use matrix runner
-    if: ${{ matrix.condition }} # Use matrix condition
+    name: E2E Tests - ${{ matrix.provider }}
+    needs: generate-e2e-matrix
+    runs-on: ${{ matrix.runner }}
+    if: ${{ matrix.condition }}
     strategy:
-      fail-fast: false # Keep fail-fast strategy
-      matrix: ${{ fromJson(needs.generate-e2e-matrix.outputs.matrix) }} # Use generated matrix
+      fail-fast: falsey
+      matrix: ${{ fromJson(needs.generate-e2e-matrix.outputs.matrix) }}
     concurrency:
-      group: ${{ matrix.provider }}-${{ github.head_ref || github.run_id }} # Use matrix provider
+      group: ${{ matrix.provider }}-${{ github.head_ref || github.run_id }}
       cancel-in-progress: true
     env:
-      PUBLIC_REPO: ${{ inputs.public_repo == 'true' }} # Keep using input for this
+      PUBLIC_REPO: ${{ inputs.public_repo == 'true' }}
     steps:
       - name: Set public registry env variables
         if: ${{ env.PUBLIC_REPO == 'true' }}
@@ -163,7 +147,7 @@ jobs:
             cat test/e2e/config/config.yaml
 
       - name: Set aws cloud provider environment variables
-        if: matrix.provider == 'aws' # Use matrix provider
+        if: matrix.provider == 'aws'
         env:
           AWS_REGION: us-west-2
           AWS_ACCESS_KEY_ID: ${{ secrets.CI_AWS_ACCESS_KEY_ID }}
@@ -174,7 +158,7 @@ jobs:
           done
 
       - name: Set azure cloud provider environment variables
-        if: matrix.provider == 'azure' # Use matrix provider
+        if: matrix.provider == 'azure'
         env:
           AZURE_REGION: westus2
           AZURE_SUBSCRIPTION_ID: ${{ secrets.CI_AZURE_SUBSCRIPTION_ID }}
@@ -187,7 +171,7 @@ jobs:
           done
 
       - name: Set gcp cloud provider environment variables
-        if: matrix.provider == 'gcp' # Use matrix provider
+        if: matrix.provider == 'gcp'
         env:
           GCP_B64ENCODED_CREDENTIALS: ${{ secrets.CI_GCP_B64ENCODED_CREDENTIALS }}
           GCP_PROJECT: k0rdent-ci
@@ -198,7 +182,7 @@ jobs:
           done
 
       - name: Set on-prem environment variables
-        if: matrix.provider == 'onprem' # Use matrix provider
+        if: matrix.provider == 'onprem'
         env:
           VSPHERE_USER: ${{ secrets.CI_VSPHERE_USER }}
           VSPHERE_PASSWORD: ${{ secrets.CI_VSPHERE_PASSWORD }}
@@ -221,15 +205,15 @@ jobs:
 
       - name: Run E2E tests
         env:
-            GINKGO_LABEL_FILTER: ${{ matrix.ginkgo_filter }} # Use matrix ginkgo_filter
-            CLUSTER_DEPLOYMENT_PREFIX: ${{ inputs.clusterprefix }} # Keep using input
-            VERSION: ${{ inputs.version }} # Keep using input
+            GINKGO_LABEL_FILTER: ${{ matrix.ginkgo_filter }}
+            CLUSTER_DEPLOYMENT_PREFIX: ${{ inputs.clusterprefix }}
+            VERSION: ${{ inputs.version }}
         run: |
             make test-e2e
       - name: Archive test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-            name: support-bundles-${{ matrix.provider }} # Use matrix provider
+            name: support-bundles-${{ matrix.provider }}
             path: |
                 *.tar.gz

@@ -126,23 +126,17 @@ jobs:
     name: E2E Tests
     uses: ./.github/workflows/e2e-test.yml
     needs:
-      - authorize # Still need authorize result and config
-      - build # Still need build outputs
+      - authorize
+      - build
     secrets: inherit
-    # Only run if the 'test e2e' label is present
-    if: ${{ contains( github.event.pull_request.labels.*.name, 'test e2e') }}
+    # Always run this job, but wait for needs.
+    if: ${{ always() }}
     with:
-      # Pass build outputs
       clusterprefix: ${{ needs.build.outputs.clusterprefix }}
       version: ${{ needs.build.outputs.version }}
       pr: ${{ needs.build.outputs.pr }}
-      # Pass authorize outputs (or defaults)
       public_repo: ${{ needs.authorize.outputs.public_repo || 'false' }}
       config: ${{ needs.authorize.outputs.config || '' }}
-      # Pass authorize result and labels for matrix generation inside the reusable workflow
-      authorize_result: ${{ needs.authorize.result }}
-      pull_request_labels: ${{ toJson(github.event.pull_request.labels.*.name) }}
-    # Strategy is now handled within the reusable workflow
 
   cleanup:
     name: Cleanup
