@@ -22,7 +22,6 @@ jobs:
   generate-e2e-matrix:
     name: Generate E2E Matrix
     runs-on: ubuntu-latest
-    if: ${{ always() }}
     outputs:
       matrix: ${{ steps.generate_matrix.outputs.matrix }}
     steps:
@@ -52,7 +51,6 @@ jobs:
             {
               "provider": "controller",
               "runner": "ubuntu-latest",
-              "condition": "true",
               "ginkgo_filter": "controller"
             }
           ]'
@@ -70,7 +68,6 @@ jobs:
               matrix=$(echo "$matrix" | jq '. + [{
                 "provider": "aws",
                 "runner": "ubuntu-latest",
-                "condition": "true", # Runs because authorize succeeded & label present
                 "ginkgo_filter": "provider:cloud"
               }]')
             fi
@@ -78,7 +75,6 @@ jobs:
               matrix=$(echo "$matrix" | jq '. + [{
                 "provider": "azure",
                 "runner": "ubuntu-latest",
-                "condition": "true", # Runs because authorize succeeded & label present
                 "ginkgo_filter": "provider:cloud"
               }]')
             fi
@@ -86,7 +82,6 @@ jobs:
               matrix=$(echo "$matrix" | jq '. + [{
                 "provider": "gcp",
                 "runner": "ubuntu-latest",
-                "condition": "true", # Runs because authorize succeeded & label present
                 "ginkgo_filter": "provider:cloud"
               }]')
             fi
@@ -96,7 +91,6 @@ jobs:
               matrix=$(echo "$matrix" | jq '. + [{
                 "provider": "onprem",
                 "runner": "self-hosted",
-                "condition": "true", # Runs because authorize succeeded & label present
                 "ginkgo_filter": "provider:onprem"
               }]')
             fi
@@ -113,9 +107,8 @@ jobs:
     name: E2E Tests - ${{ matrix.provider }}
     needs: generate-e2e-matrix
     runs-on: ${{ matrix.runner }}
-    if: ${{ matrix.condition }}
     strategy:
-      fail-fast: falsey
+      fail-fast: false
       matrix: ${{ fromJson(needs.generate-e2e-matrix.outputs.matrix) }}
     concurrency:
       group: ${{ matrix.provider }}-${{ github.head_ref || github.run_id }}
